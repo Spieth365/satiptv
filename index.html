@@ -3,107 +3,250 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SATIPTV Player Debug</title>
+<title>SATIPTV Web Player</title>
+
 <style>
-body{margin:0;background:#111;color:white;font-family:Arial}
-.app{display:grid;grid-template-columns:320px 1fr;height:100vh}
-.sidebar{background:#1b1b1b;padding:12px;overflow:auto}
-.channel{padding:10px;margin:5px 0;background:#333;border-radius:6px;cursor:pointer}
-.channel:hover{background:#555}
-.player{padding:16px}
-video{width:100%;max-height:70vh;background:black}
-#log{white-space:pre-wrap;background:#000;color:#0f0;padding:10px;margin-top:10px;font-size:13px}
+body {
+  margin: 0;
+  background: #111;
+  color: white;
+  font-family: Arial, sans-serif;
+}
+
+.app {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  height: 100vh;
+}
+
+.sidebar {
+  background: #1b1b1b;
+  padding: 12px;
+  overflow-y: auto;
+  border-right: 1px solid #333;
+}
+
+.sidebar h2 {
+  margin-top: 0;
+}
+
+#search {
+  width: 100%;
+  padding: 10px;
+  box-sizing: border-box;
+  margin-bottom: 10px;
+  border: 0;
+  border-radius: 6px;
+}
+
+.channel {
+  padding: 10px;
+  margin-bottom: 6px;
+  background: #2c2c2c;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.channel:hover {
+  background: #444;
+}
+
+.channel.active {
+  background: #0066cc;
+}
+
+.player {
+  padding: 16px;
+}
+
+video {
+  width: 100%;
+  max-height: 75vh;
+  background: black;
+  border-radius: 10px;
+}
+
+#status {
+  margin-top: 10px;
+  color: #bbb;
+  word-break: break-all;
+  font-size: 14px;
+}
+
+#debug {
+  white-space: pre-wrap;
+  background: #000;
+  color: #00ff66;
+  padding: 10px;
+  margin-top: 12px;
+  font-size: 12px;
+  max-height: 180px;
+  overflow-y: auto;
+}
 </style>
 </head>
+
 <body>
 
 <div class="app">
-  <div class="sidebar">
-    <h2>Canales</h2>
-    <div id="channels"></div>
-  </div>
 
-  <div class="player">
-    <h1 id="title">Cargando...</h1>
-    <video id="video" controls autoplay muted playsinline></video>
-    <div id="log"></div>
-  </div>
+  <aside class="sidebar">
+    <h2>Canales</h2>
+    <input id="search" placeholder="Buscar canal...">
+    <div id="channels"></div>
+  </aside>
+
+  <main class="player">
+    <h1 id="title">Cargando lista...</h1>
+
+    <video
+      id="video"
+      controls
+      autoplay
+      muted
+      playsinline
+    ></video>
+
+    <div id="status"></div>
+    <div id="debug"></div>
+  </main>
+
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.min.js"></script>
 
 <script>
-const WORKER_URL = "https://satiptv.javgr77.workers.dev/";
+const WORKER_URL = "https://satiptv-v2.javigr77.workers.dev/";
+
 let channels = [];
 let player = null;
+let currentChannelUrl = null;
 
-function log(msg){
-  document.getElementById("log").textContent += msg + "\n";
+function log(msg) {
+  const debug = document.getElementById("debug");
+  debug.textContent += msg + "\n";
+  debug.scrollTop = debug.scrollHeight;
   console.log(msg);
 }
 
-async function loadList(){
+async function loadList() {
   log("Cargando lista desde Worker...");
-  const res = await fetch(WORKER_URL + "?v=" + Date.now(), {cache:"no-store"});
 
-  log("Estado HTTP Worker: " + res.status);
+  const res = await fetch(WORKER_URL + "?v=" + Date.now(), {
+    cache: "no-store"
+  });
+
+  log("Estado Worker: " + res.status);
+
+  if (!res.ok) {
+    throw new Error("No se pudo cargar la lista. HTTP " + res.status);
+  }
 
   const text = await res.text();
-  log("Primeros 200 caracteres:");
-  log(text.slice(0,200));
+
+  log("Primeros caracteres:");
+  log(text.slice(0, 200));
 
   channels = parseM3U(text);
+
   log("Canales detectados: " + channels.length);
 
-  renderChannels();
+  renderChannels(channels);
 
-  if(channels.length > 0){
+  if (channels.length > 0) {
     playChannel(channels[0]);
-  }else{
-    document.getElementById("title").textContent = "No se detectaron canales";
+  } else {
+    document.getElementById("title").textContent = "No hay canales";
   }
 }
 
-function parseM3U(text){
-  const lines = text.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
-  const out = [];
+function parseM3U(text) {
+  const lines = text
+    .split(/\r?\n/)
+    .map(x => x.trim())
+    .filter(Boolean);
 
-  for(let i=0;i<lines.length;i++){
-    if(lines[i].startsWith("#EXTINF")){
-      const name = lines[i].split(",").pop().trim() || "Canal sin nombre";
-      const url = lines[i+1];
+  const result = [];
 
-      if(url && url.startsWith("http")){
-        out.push({name,url});
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    if (line.startsWith("#EXTINF")) {
+      const name = getChannelName(line);
+      const logo = getAttr(line, "tvg-logo");
+      const group = getAttr(line, "group-title");
+      const url = lines[i + 1];
+
+      if (url && url.startsWith("http")) {
+        result.push({
+          name,
+          logo,
+          group,
+          url
+        });
       }
+
+      i++;
     }
   }
 
-  return out;
+  return result;
 }
 
-function renderChannels(){
+function getChannelName(extinf) {
+  const parts = extinf.split(",");
+  if (parts.length < 2) return "Canal sin nombre";
+  return parts.slice(1).join(",").trim();
+}
+
+function getAttr(text, attr) {
+  const regex = new RegExp(attr + '="([^"]*)"', "i");
+  const match = text.match(regex);
+  return match ? match[1] : "";
+}
+
+function renderChannels(list) {
   const box = document.getElementById("channels");
   box.innerHTML = "";
 
-  channels.forEach(ch=>{
+  list.forEach(channel => {
     const div = document.createElement("div");
     div.className = "channel";
-    div.textContent = ch.name;
-    div.onclick = ()=>playChannel(ch);
+    div.textContent = channel.name;
+
+    if (channel.url === currentChannelUrl) {
+      div.classList.add("active");
+    }
+
+    div.onclick = () => playChannel(channel);
+
     box.appendChild(div);
   });
 }
 
-function playChannel(ch){
-  document.getElementById("title").textContent = ch.name;
-  log("Intentando reproducir:");
-  log(ch.url);
-
+function playChannel(channel) {
   const video = document.getElementById("video");
+  const title = document.getElementById("title");
+  const status = document.getElementById("status");
 
-  if(player){
-    player.destroy();
+  currentChannelUrl = channel.url;
+
+  title.textContent = channel.name;
+  status.textContent = "Cargando: " + channel.url;
+
+  log("Reproduciendo canal: " + channel.name);
+  log("URL: " + channel.url);
+
+  renderChannels(
+    filterChannels(
+      document.getElementById("search").value
+    )
+  );
+
+  if (player) {
+    try {
+      player.destroy();
+    } catch (e) {}
     player = null;
   }
 
@@ -111,44 +254,74 @@ function playChannel(ch){
   video.removeAttribute("src");
   video.load();
 
-  video.onerror = function(){
-    log("ERROR VIDEO: " + (video.error ? video.error.code : "desconocido"));
+  video.onerror = function () {
+    const code = video.error ? video.error.code : "desconocido";
+    log("Error VIDEO: " + code);
+    status.textContent = "Error de vídeo: " + code;
   };
 
-  if(window.mpegts && mpegts.getFeatureList().mseLivePlayback){
+  if (window.mpegts && mpegts.getFeatureList().mseLivePlayback) {
     log("Usando mpegts.js");
 
     player = mpegts.createPlayer({
       type: "mpegts",
       isLive: true,
-      url: ch.url,
+      url: channel.url,
       cors: true
     });
 
-    player.on(mpegts.Events.ERROR, function(type, detail, info){
-      log("ERROR MPEGTS:");
+    player.on(mpegts.Events.ERROR, function(type, detail, info) {
+      log("ERROR MPEGTS");
       log("Tipo: " + type);
       log("Detalle: " + detail);
       log(JSON.stringify(info || {}));
+      status.textContent = "Error MPEGTS: " + type + " / " + detail;
     });
 
     player.attachMediaElement(video);
     player.load();
 
-    player.play().then(()=>{
-      log("Play iniciado");
-    }).catch(err=>{
-      log("No pudo iniciar play: " + err.message);
-    });
+    player.play()
+      .then(() => {
+        status.textContent = "Reproduciendo: " + channel.name;
+      })
+      .catch(err => {
+        log("No se pudo iniciar play: " + err.message);
+        status.textContent = "Pulsa play manualmente.";
+      });
 
-  }else{
-    log("mpegts.js no disponible, usando vídeo nativo");
-    video.src = ch.url;
-    video.play().catch(err=>log("Error nativo: " + err.message));
+  } else {
+    log("mpegts.js no disponible. Usando reproducción nativa.");
+
+    video.src = channel.url;
+
+    video.play()
+      .then(() => {
+        status.textContent = "Reproducción nativa: " + channel.name;
+      })
+      .catch(err => {
+        log("Error nativo: " + err.message);
+        status.textContent = "Error nativo: " + err.message;
+      });
   }
 }
 
-loadList().catch(err=>{
+function filterChannels(q) {
+  q = (q || "").toLowerCase();
+
+  return channels.filter(c =>
+    c.name.toLowerCase().includes(q) ||
+    (c.group || "").toLowerCase().includes(q)
+  );
+}
+
+document.getElementById("search").addEventListener("input", e => {
+  renderChannels(filterChannels(e.target.value));
+});
+
+loadList().catch(err => {
+  document.getElementById("title").textContent = "Error";
+  document.getElementById("status").textContent = err.message;
   log("ERROR GENERAL: " + err.message);
 });
 </script>
